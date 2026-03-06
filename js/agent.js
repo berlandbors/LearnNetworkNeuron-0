@@ -7,7 +7,7 @@
 import { NeuralNetwork } from './neural-network.js';
 
 /** Размер входного вектора (должен совпадать с getInputs()) */
-export const INPUT_SIZE = 32;
+export const INPUT_SIZE = 36;
 /** Количество возможных действий: вверх, вниз, влево, вправо */
 export const OUTPUT_SIZE = 4;
 
@@ -146,7 +146,7 @@ export class Agent {
 
     /**
      * Получить входной вектор для нейронной сети.
-     * Размерность: INPUT_SIZE = 32
+     * Размерность: INPUT_SIZE = 36
      *
      * [0..7]  - 8 расстояний до стен (нормализованных)
      * [8..9]  - нормализованная позиция агента (x/w, y/h)
@@ -158,6 +158,7 @@ export class Agent {
      * [23]    - нормализованное количество шагов
      * [24..27] - посещены ли соседние клетки (4 направления)
      * [28..31] - доля посещённых клеток в 4 квадрантах (3×3 окрестность)
+     * [32..35] - глобальные счётчики посещений соседних клеток (4 направления)
      * @returns {number[]}
      */
     getInputs() {
@@ -250,6 +251,20 @@ export class Agent {
         }
         inputs.push(Math.min(visitedDownRight / 4, 1));
 
+        // 9. Глобальная статистика посещений соседних клеток
+        // (только для RL агента, для генетического — нули)
+        if (this.globalVisitCount) {
+            for (const { dy: ddy, dx: ddx } of DIRECTIONS) {
+                const ny = this.pos.y + ddy;
+                const nx = this.pos.x + ddx;
+                const key = `${nx},${ny}`;
+                const globalVisits = this.globalVisitCount.get(key) ?? 0;
+                inputs.push(Math.min(globalVisits / 20, 1));
+            }
+        } else {
+            inputs.push(0, 0, 0, 0);
+        }
+
         return inputs;
     }
 
@@ -332,36 +347,60 @@ export class Agent {
         if (this.reached) return 1000;
 
         let reward = 0;
+        const currentKey = `${this.pos.x},${this.pos.y}`;
 
-        // Приближение / удаление от цели
+        // 1. Приближение / удаление от цели
         const distDelta = prevDist - newDist;
         if (distDelta > 0) {
-            reward += 10 * distDelta;
+            reward += 10 * distDelta;  // награда за приближение
         } else {
-            reward += 5 * distDelta; // штраф за отдаление
+            reward += 5 * distDelta;   // штраф за отдаление (distDelta < 0)
         }
 
-        // Штраф за столкновение со стеной
+        // 2. Штраф за столкновение со стеной
         if (blocked) {
             reward -= 20;
         }
 
-        // Exploration bonus: награда за новую клетку / прогрессивный штраф за повторное посещение
-        const visitCount = this.visitCount.get(`${this.pos.x},${this.pos.y}`) ?? 1;
-        if (visitCount === 1 && !blocked) {
-            reward += 5; // бонус за первое посещение
-        } else if (visitCount > 1) {
-            reward -= 10 * Math.min(visitCount - 1, 5); // прогрессивный штраф
+        // 3. Локальная память (текущий эпизод)
+        const localVisits = this.visitCount.get(currentKey) ?? 1;
+
+        // 4. Глобальная память (все эпизоды) — только для RL агента
+        let globalVisits = 0;
+        if (this.globalVisitCount) {
+            globalVisits = this.globalVisitCount.get(currentKey) ?? 0;
         }
 
-        // Curiosity bonus: награда за исследование далёких от старта областей
+        // 5. Exploration bonus: комбинация локальной и глобальной памяти
+        if (!blocked) {
+            if (localVisits === 1) {
+                // Первое посещение в текущем эпизоде
+                if (globalVisits <= 1) {
+                    // Вообще первый раз в этой клетке (или почти первый)!
+                    reward += 10;
+                } else {
+                    // Уже были здесь в прошлых эпизодах — затухающий бонус
+                    reward += 5 / (1 + globalVisits * 0.05);
+                }
+            } else if (localVisits > 1) {
+                // Повторное посещение в текущем эпизоде — прогрессивный штраф
+                reward -= 15 * Math.min(localVisits - 1, 5);
+            }
+        }
+
+        // 6. Дополнительный штраф за "популярные" клетки (избегать протоптанных путей)
+        if (globalVisits > 15) {
+            reward -= 5 * Math.log10(globalVisits - 14);
+        }
+
+        // 7. Curiosity bonus: награда за исследование далёких от старта областей
         const explorationRadius = Math.sqrt(
             Math.pow(this.pos.x - this.path[0].x, 2) +
             Math.pow(this.pos.y - this.path[0].y, 2)
         );
-        reward += explorationRadius * 0.1;
+        reward += explorationRadius * 0.15;
 
-        // Штраф за каждый шаг
+        // 8. Штраф за каждый шаг (мотивация на эффективность)
         reward -= 0.1;
 
         return reward;

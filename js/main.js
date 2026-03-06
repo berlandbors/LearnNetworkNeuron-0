@@ -27,6 +27,7 @@ const config = {
     cellSize: 28,
     showSensors: false,
     showNeuralViz: false,
+    showMemoryHeatmap: false,
 };
 
 // ─── Глобальное состояние ────────────────────────────────────────────────────
@@ -243,6 +244,12 @@ function updateRL() {
 function renderFrame() {
     renderer.clear();
     renderer.drawMaze(state.maze);
+
+    // Тепловая карта глобальной памяти (под путём агента)
+    if (state.mode === 'rl' && state.rlAgent && config.showMemoryHeatmap) {
+        renderer.drawGlobalMemoryHeatmap(state.rlAgent.globalVisitCount);
+    }
+
     renderer.drawGrid();
 
     if (state.showOptimal && state.optimalPath) {
@@ -296,6 +303,26 @@ function updateUI() {
             document.getElementById('reachedVal').textContent = agent.reached ? '✅' : '❌';
             document.getElementById('epsilonVal').textContent =
                 agent.epsilon !== undefined ? agent.epsilon.toFixed(3) : '—';
+
+            // Визуализация глобальной памяти
+            if (agent.globalVisited) {
+                const stats = agent.getGlobalMemoryStats();
+                const totalCells = state.maze.length * state.maze[0].length;
+                const exploredPercent = ((stats.totalCells / totalCells) * 100).toFixed(1);
+
+                let memoryDisplay = document.getElementById('globalMemoryDisplay');
+                if (!memoryDisplay) {
+                    memoryDisplay = document.createElement('div');
+                    memoryDisplay.id = 'globalMemoryDisplay';
+                    memoryDisplay.style.cssText = 'margin-top: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7);';
+                    document.getElementById('epsilonRow').parentElement.appendChild(memoryDisplay);
+                }
+
+                memoryDisplay.innerHTML =
+                    `🗺️ Исследовано: <strong>${stats.totalCells}</strong> клеток (${exploredPercent}%)<br>` +
+                    `📊 Ср. посещений: <strong>${stats.avgVisits.toFixed(1)}</strong> | ` +
+                    `Макс: <strong>${stats.maxVisits}</strong>`;
+            }
         }
     }
 }
@@ -443,6 +470,15 @@ function toggleSensors() {
     renderFrame();
 }
 
+function toggleMemoryHeatmap() {
+    config.showMemoryHeatmap = !config.showMemoryHeatmap;
+    const btn = document.getElementById('btnMemoryHeatmap');
+    if (btn) {
+        btn.textContent = config.showMemoryHeatmap ? '🗺️ Память ✓' : '🗺️ Память';
+    }
+    renderFrame();
+}
+
 function showToast(msg) {
     const toast = document.getElementById('toast');
     if (!toast) return;
@@ -462,6 +498,7 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btnSpeed').addEventListener('click', toggleSpeed);
     document.getElementById('btnOptimal').addEventListener('click', showOptimalPath);
     document.getElementById('btnSensors').addEventListener('click', toggleSensors);
+    document.getElementById('btnMemoryHeatmap')?.addEventListener('click', toggleMemoryHeatmap);
     document.getElementById('btnSave').addEventListener('click', saveModel);
     document.getElementById('btnLoad').addEventListener('click', loadModel);
     document.getElementById('btnDownload').addEventListener('click', downloadModel);
