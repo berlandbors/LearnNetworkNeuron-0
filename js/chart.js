@@ -18,6 +18,7 @@ export class TrainingChart {
             minFitness: [],
             stepsToGoal: [],
             successRate: [],
+            maxStepsValues: [],
         };
 
         /** Отступы вокруг области графика */
@@ -46,6 +47,11 @@ export class TrainingChart {
         this.history.minFitness.push(min);
         this.history.stepsToGoal.push(avgSteps);
         this.history.successRate.push(successRate * 100);
+
+        // Сохранение адаптивного maxSteps для RL агента
+        if (population[0] && population[0].currentMaxSteps !== undefined) {
+            this.history.maxStepsValues.push(population[0].currentMaxSteps);
+        }
 
         this.draw();
     }
@@ -169,6 +175,30 @@ export class TrainingChart {
             ctx.fillRect(legendX, legendY - 8, 14, 3);
             ctx.fillStyle = 'rgba(255,255,255,0.8)';
             ctx.fillText('Success%', legendX + 18, legendY);
+            legendY += 16;
+        }
+
+        // Линия адаптивного maxSteps (нормированная, серая пунктирная)
+        if (history.maxStepsValues && history.maxStepsValues.length > 1) {
+            const maxInData = Math.max(...history.maxStepsValues);
+            ctx.strokeStyle = 'rgba(156, 163, 175, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            for (let i = 0; i < Math.min(N, history.maxStepsValues.length); i++) {
+                const x         = toX(i);
+                const normalized = history.maxStepsValues[i] / maxInData;
+                const y         = P.top + plotH - normalized * plotH;
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Подпись в легенде
+            ctx.fillStyle = 'rgba(156, 163, 175, 0.5)';
+            ctx.fillRect(legendX, legendY - 8, 14, 3);
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.fillText('MaxSteps', legendX + 18, legendY);
         }
 
         // Заголовок
@@ -196,6 +226,7 @@ export class TrainingChart {
             minFitness: [],
             stepsToGoal: [],
             successRate: [],
+            maxStepsValues: [],
         };
         this.clear();
     }

@@ -218,11 +218,17 @@ function updateRL() {
     const stepReward = agent.fitness - fitnessBefore;
 
     const state_t1 = agent.getInputs();
-    const done     = agent.reached || agent.steps >= config.maxSteps;
+
+    // Используем адаптивный метод вместо config.maxSteps
+    const done = agent.isDone();
 
     agent.remember(state_t, action, stepReward, state_t1, done);
 
     if (done) {
+        // Логирование причины завершения
+        const endReason = agent.getEpisodeEndReason();
+        console.log(`Эпизод ${state.generation}: ${endReason.icon} ${endReason.reason}`);
+
         agent.replay(32);
         agent.updateEpsilon();
 
@@ -231,9 +237,10 @@ function updateRL() {
             state.bestAgent = agent;
         }
 
-        // Обновить график (pseudo-population для chart)
+        // Обновить график
         chart.update(state.generation, [agent]);
 
+        // Сброс с адаптацией maxSteps
         agent.reset(state.start);
         state.generation++;
     }
@@ -323,6 +330,42 @@ function updateUI() {
                     `📊 Ср. посещений: <strong>${stats.avgVisits.toFixed(1)}</strong> | ` +
                     `Макс: <strong>${stats.maxVisits}</strong>`;
             }
+
+            // Отображение адаптивного maxSteps
+            if (agent.currentMaxSteps !== undefined) {
+                const maxStats  = agent.getMaxStepsStats();
+                const endStats  = agent.getEpisodeEndStats(20);
+                const range     = maxStats.max - maxStats.min;
+                const progress  = range > 0
+                    ? ((maxStats.max - maxStats.current) / range * 100).toFixed(1)
+                    : '0';
+
+                let adaptiveStatsDisplay = document.getElementById('adaptiveStatsDisplay');
+                if (!adaptiveStatsDisplay) {
+                    adaptiveStatsDisplay = document.createElement('div');
+                    adaptiveStatsDisplay.id = 'adaptiveStatsDisplay';
+                    adaptiveStatsDisplay.style.cssText =
+                        'margin-top:0.5rem;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;font-size:0.85rem;';
+                    document.getElementById('epsilonRow').parentElement.appendChild(adaptiveStatsDisplay);
+                }
+
+                adaptiveStatsDisplay.innerHTML = `
+                    <div style="margin-bottom:0.25rem;color:rgba(255,255,255,0.9);">
+                        <strong>🎯 MaxSteps:</strong> ${maxStats.current}
+                        <span style="color:rgba(255,255,255,0.6);font-size:0.8em;">
+                            (${maxStats.min} – ${maxStats.max})
+                        </span>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.2);height:4px;border-radius:2px;margin-bottom:0.5rem;">
+                        <div style="background:linear-gradient(90deg,#667eea,#10b981);height:100%;width:${progress}%;border-radius:2px;"></div>
+                    </div>
+                    <div style="display:flex;gap:1rem;font-size:0.8em;color:rgba(255,255,255,0.7);">
+                        <span>🎯 ${endStats.goal}</span>
+                        <span>🔄 ${endStats.stuck}</span>
+                        <span>⏱️ ${endStats.timeout}</span>
+                        <span style="margin-left:auto;">✅ ${maxStats.successRate}%</span>
+                    </div>`;
+            }
         }
     }
 }
@@ -383,6 +426,10 @@ function changeMode(mode) {
     // Показать/скрыть панель архитектуры нейросети
     const nnArchPanel = document.getElementById('nnArchPanel');
     if (nnArchPanel) nnArchPanel.style.display = mode === 'rl' ? 'block' : 'none';
+
+    // Показать/скрыть подсказку про адаптивный maxSteps
+    const maxStepsNote = document.getElementById('maxStepsNote');
+    if (maxStepsNote) maxStepsNote.style.display = mode === 'rl' ? 'block' : 'none';
 
     resetTraining();
 }
