@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Нейронная сеть в лабиринте — обучение агента с помощью генетического алгоритма и обучения с подкреплением">
+    <meta name="keywords" content="нейронная сеть, лабиринт, генетический алгоритм, обучение с подкреплением, JavaScript, AI">
+    <meta name="author" content="Neural Maze Trainer">
+    <meta property="og:title" content="Neural Maze Trainer">
+    <meta property="og:description" content="Обучение нейросети ориентироваться в лабиринте — генетический алгоритм и Q-обучение">
+    <title>Neural Maze Trainer — Нейросеть в Лабиринте</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<header>
+    <h1>🧠 Neural Maze Trainer</h1>
+    <p>Обучите нейронную сеть проходить лабиринт — генетический алгоритм и обучение с подкреплением</p>
+</header>
+
+<div class="container">
+
+    <!-- ── Основная сетка ─────────────────────────────────────── -->
+    <div class="main-grid">
+
+        <!-- ── Левая панель: управление ──────────────────────── -->
+        <aside>
+
+            <!-- Режим -->
+            <div class="panel">
+                <h3>Режим обучения</h3>
+                <div class="mode-switch">
+                    <button class="mode-btn active" data-mode="genetic">🧬 Генетика</button>
+                    <button class="mode-btn"        data-mode="rl">🤖 RL</button>
+                </div>
+
+                <!-- Кнопки управления -->
+                <div class="btn-group">
+                    <button id="btnStart"  class="btn btn-success">▶ Старт</button>
+                    <button id="btnPause"  class="btn btn-warning" disabled>⏸ Пауза</button>
+                    <button id="btnReset"  class="btn btn-danger">↺ Сброс</button>
+                    <button id="btnSpeed"  class="btn btn-secondary">⚡ Скорость: 1x</button>
+                </div>
+
+                <!-- Дополнительные кнопки -->
+                <div class="btn-group">
+                    <button id="btnOptimal"  class="btn btn-secondary btn-sm">👁 A* путь</button>
+                    <button id="btnSensors"  class="btn btn-secondary btn-sm">📡 Сенсоры</button>
+                    <button id="btnExport"   class="btn btn-secondary btn-sm">📊 CSV</button>
+                </div>
+            </div>
+
+            <!-- Модель -->
+            <div class="panel" style="margin-top:0.85rem;">
+                <h3>Модель</h3>
+                <div class="btn-group">
+                    <button id="btnSave"     class="btn btn-primary btn-sm">💾 Сохранить</button>
+                    <button id="btnLoad"     class="btn btn-secondary btn-sm">📂 Загрузить</button>
+                    <button id="btnDownload" class="btn btn-secondary btn-sm">⬇ Скачать</button>
+                    <button id="btnUpload"   class="btn btn-secondary btn-sm">⬆ Из файла</button>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- ── Центр: canvas ──────────────────────────────────── -->
+        <section class="canvas-section">
+            <div class="panel" style="padding:0.75rem;">
+                <div class="canvas-wrapper">
+                    <canvas id="mazeCanvas" width="560" height="560"></canvas>
+                </div>
+            </div>
+            <div class="panel" style="padding:0.75rem;">
+                <canvas id="chartCanvas" width="560" height="180"></canvas>
+            </div>
+        </section>
+
+        <!-- ── Правая панель: статистика и настройки ─────────── -->
+        <aside>
+
+            <!-- Статистика -->
+            <div class="panel">
+                <h3>Статистика</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Поколение</div>
+                        <div class="stat-value" id="generationVal">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Лучший</div>
+                        <div class="stat-value" id="bestFitnessVal">—</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Агент</div>
+                        <div class="stat-value" id="currentAgentVal">—</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Шагов</div>
+                        <div class="stat-value" id="stepsVal">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Цель</div>
+                        <div class="stat-value" id="reachedVal">❌</div>
+                    </div>
+                    <div class="stat-item" id="epsilonRow" style="display:none;">
+                        <div class="stat-label">ε (epsilon)</div>
+                        <div class="stat-value" id="epsilonVal">1.000</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Настройки -->
+            <div class="panel" style="margin-top:0.85rem;">
+                <h3>Настройки</h3>
+                <div class="settings-list">
+
+                    <div class="setting-row">
+                        <label>
+                            Сложность
+                        </label>
+                        <select id="mazeDifficulty">
+                            <option value="easy">🟢 Легко (10×10)</option>
+                            <option value="medium">🟡 Средне (15×15)</option>
+                            <option value="hard" selected>🔴 Сложно (20×20)</option>
+                            <option value="random">🎲 Случайный</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-row">
+                        <label>
+                            Размер популяции
+                            <span id="populationSizeVal">50</span>
+                        </label>
+                        <input type="range" id="populationSize"
+                               min="10" max="200" value="50" step="10">
+                    </div>
+
+                    <div class="setting-row">
+                        <label>
+                            Мутация
+                            <span id="mutationRateVal">0.10</span>
+                        </label>
+                        <input type="range" id="mutationRate"
+                               min="0.01" max="0.5" value="0.1" step="0.01">
+                    </div>
+
+                    <div class="setting-row">
+                        <label>
+                            Скрытые нейроны
+                            <span id="hiddenSizeVal">16</span>
+                        </label>
+                        <input type="range" id="hiddenSize"
+                               min="8" max="64" value="16" step="4">
+                    </div>
+
+                    <div class="setting-row">
+                        <label>
+                            Макс. шагов
+                            <span id="maxStepsVal">400</span>
+                        </label>
+                        <input type="range" id="maxSteps"
+                               min="100" max="1000" value="400" step="50">
+                    </div>
+
+                </div>
+            </div>
+
+        </aside>
+
+    </div><!-- /.main-grid -->
+
+    <!-- ── Описание ────────────────────────────────────────────── -->
+    <div class="description">
+        <h2>Как это работает</h2>
+        <p>
+            <strong>Neural Maze Trainer</strong> — интерактивная демонстрация двух подходов к обучению
+            нейронной сети управлять агентом в лабиринте.
+        </p>
+        <ul>
+            <li>
+                <strong>🧬 Генетический алгоритм</strong> — каждый агент имеет нейронную сеть
+                в качестве «мозга». После прохождения эпизода лучшие агенты отбираются и
+                скрещиваются (кроссовер + мутация), образуя следующее поколение.
+            </li>
+            <li>
+                <strong>🤖 Обучение с подкреплением (Q-learning)</strong> — единственный агент
+                исследует лабиринт, получает вознаграждения и обновляет Q-сеть через
+                Experience Replay. Epsilon-greedy стратегия балансирует исследование и
+                эксплуатацию знаний.
+            </li>
+            <li>
+                <strong>📡 Сенсоры</strong> — 8 расстояний до стен, нормированная позиция,
+                угол и расстояние до цели, последние 4 действия.
+            </li>
+            <li>
+                <strong>👁 A* оптимальный путь</strong> — золотая пунктирная линия показывает
+                кратчайший возможный маршрут для сравнения с агентом.
+            </li>
+        </ul>
+    </div>
+
+</div><!-- /.container -->
+
+<!-- Toast-уведомление -->
+<div id="toast"></div>
+
+<footer>
+    <p>Neural Maze Trainer &mdash; нейронная сеть + генетический алгоритм + Q-обучение</p>
+</footer>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
