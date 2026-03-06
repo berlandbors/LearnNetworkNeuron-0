@@ -24,25 +24,28 @@ const EPSILON_DECAY = 0.995;
 /** Шаг обновления целевой сети */
 const TARGET_UPDATE_FREQ = 100;
 
-// ── Константы обнаружения застревания ────────────────────────────────────────
+// ── Константы умных детекторов завершения эпизода ────────────────────────────
 
-/** Окно последних шагов для анализа зацикливания */
-const STUCK_DETECTION_WINDOW = 20;
-/** Максимальное количество уникальных клеток в окне, считающееся зацикливанием */
-const STUCK_LOOP_CELLS = 4;
-/** Минимум уникальных клеток за весь эпизод (ниже = подозрение на застревание) */
-const STUCK_MIN_UNIQUE_CELLS = 15;
-/** Максимальная доля повторных посещений (выше = застревание) */
-const STUCK_MAX_REPEAT_RATE = 0.6;
-
-// ── Константы адаптивного maxSteps ───────────────────────────────────────────
-
-/** Интервал успехов для уменьшения maxSteps */
-const SUCCESS_REDUCTION_INTERVAL = 5;
-/** Количество неудач подряд для увеличения maxSteps */
-const FAILURE_INCREASE_THRESHOLD = 10;
-/** Максимальное количество хранимых причин завершения эпизодов */
-const MAX_EPISODE_HISTORY = 100;
+/** Размер окна последних позиций для обнаружения зацикливания */
+const RECENT_POSITIONS_WINDOW = 20;
+/** Максимальное число уникальных клеток в окне, считающееся зациклом */
+const LOOP_UNIQUE_CELLS_MAX = 3;
+/** Доля «челночных» движений (A→B→A), считающаяся зациклом */
+const SHUTTLE_RATE_THRESHOLD = 0.7;
+/** Размер окна истории расстояний до цели */
+const DISTANCE_HISTORY_WINDOW = 20;
+/** Интервал в шагах между записями расстояния до цели */
+const DISTANCE_SAMPLE_INTERVAL = 10;
+/** Минимальный прогресс к цели (снижение расстояния) за окно истории */
+const PROGRESS_THRESHOLD = 0.95;
+/** Минимальное число шагов перед проверкой прогресса */
+const MIN_STEPS_FOR_PROGRESS = 200;
+/** Порог доли повторных посещений, считающийся избыточным */
+const REPEAT_RATE_THRESHOLD = 0.70;
+/** Минимальное число шагов перед проверкой повторов */
+const MIN_STEPS_FOR_REPEAT = 100;
+/** Аварийный лимит шагов (страховка от зависания) */
+const EMERGENCY_STEP_LIMIT = 10000;
 
 export class RLAgent extends Agent {
     /**
@@ -119,237 +122,246 @@ export class RLAgent extends Agent {
         /** История эффективности исследования (% новых клеток за эпизод) */
         this.explorationEfficiency = [];
 
-        // ── Адаптивный maxSteps ───────────────────────────────────────────────
+        // ── Поля умных детекторов завершения эпизода ─────────────────────────
 
-        /** Начальный лимит шагов (большой — для исследования на старте) */
-        this.baseMaxSteps = 3000;
-        /** Минимальный лимит шагов (для обученного агента) */
-        this.minMaxSteps = 300;
-        /** Текущий лимит шагов (изменяется динамически) */
-        this.currentMaxSteps = this.baseMaxSteps;
+        /** Последние N позиций для обнаружения зацикливания */
+        this.recentPositions = [];
+        /** Размер окна для recentPositions */
+        this.maxRecentPositions = RECENT_POSITIONS_WINDOW;
 
-        /** Счётчик успешных эпизодов */
-        this.successCount = 0;
-        /** Количество неудач подряд (без успеха) */
-        this.consecutiveFailures = 0;
+        /** История расстояний до цели (записывается каждые 10 шагов) */
+        this.distanceHistory = [];
+        /** Размер окна для distanceHistory */
+        this.maxDistanceHistory = DISTANCE_HISTORY_WINDOW;
+
+        /** Предыдущая позиция агента */
+        this.prevPos = null;
+
+        /** Статистика причин завершения эпизодов */
+        this.terminationReasons = {
+            success:    0,
+            stuck:      0,
+            noProgress: 0,
+            repetitive: 0,
+            emergency:  0,
+        };
+
         /** Общее количество эпизодов */
         this.totalEpisodes = 0;
-
-        /** История изменений currentMaxSteps */
-        this.maxStepsHistory = [];
-        /** Причины завершения последних эпизодов */
-        this.episodeReasons = [];
+        /** Количество успешных эпизодов */
+        this.successfulEpisodes = 0;
     }
 
-    // ── Обнаружение застревания и управление эпизодом ────────────────────────
+    // ── Умные детекторы завершения эпизода ───────────────────────────────────
 
     /**
-     * Определить, застрял ли агент (зацикливание).
+     * Обнаружить зацикливание агента.
+     * Проверяет три паттерна:
+     * 1. Малое число уникальных позиций в окне
+     * 2. Повторяющаяся последовательность позиций
+     * 3. «Челночные» движения A→B→A→B
      * @returns {boolean}
      */
-    isStuck() {
-        if (this.steps < 100) return false;
-
-        const uniqueCells  = this.visited.size;
-        const totalSteps   = this.steps;
-        const repeatRate   = (totalSteps - uniqueCells) / totalSteps;
-
-        // Явное зацикливание: последние N шагов — только 3-4 клетки
-        const recentPathSize = STUCK_DETECTION_WINDOW;
-        if (this.path.length >= recentPathSize) {
-            const recentCells = new Set();
-            for (let i = this.path.length - recentPathSize; i < this.path.length; i++) {
-                recentCells.add(`${this.path[i].x},${this.path[i].y}`);
-            }
-            if (recentCells.size <= STUCK_LOOP_CELLS) return true;
+    isStuckInLoop() {
+        if (this.recentPositions.length < this.maxRecentPositions) {
+            return false;
         }
 
-        // Слишком мало уникальных клеток и высокий процент повторов
-        return uniqueCells < STUCK_MIN_UNIQUE_CELLS && repeatRate > STUCK_MAX_REPEAT_RATE;
+        // Метод 1: мало уникальных позиций в окне
+        const uniqueRecent = new Set(this.recentPositions);
+        if (uniqueRecent.size <= LOOP_UNIQUE_CELLS_MAX) {
+            return true;
+        }
+
+        // Метод 2: паттерн из первых 5 позиций повторяется сразу после себя
+        const patternLength = 5;
+        const pattern = this.recentPositions.slice(0, patternLength);
+        const next     = this.recentPositions.slice(patternLength, patternLength * 2);
+        if (next.length === patternLength && pattern.join('|') === next.join('|')) {
+            return true;
+        }
+
+        // Метод 3: более 70% шагов — «челночные» (pos[i] === pos[i-2])
+        let shuttleCount = 0;
+        for (let i = 2; i < this.recentPositions.length; i++) {
+            if (this.recentPositions[i] === this.recentPositions[i - 2]) {
+                shuttleCount++;
+            }
+        }
+        if (shuttleCount / (this.recentPositions.length - 2) > SHUTTLE_RATE_THRESHOLD) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
-     * Получить текст причины застревания (для логирования).
-     * @returns {string}
+     * Обнаружить отсутствие прогресса к цели.
+     * Сравнивает среднее расстояние в первой и второй половине истории.
+     * @returns {boolean}
      */
-    getStuckReason() {
-        const uniqueCells = this.visited.size;
-        const repeatRate  = ((this.steps - uniqueCells) / this.steps * 100).toFixed(1);
-        return `${uniqueCells} клеток, ${repeatRate}% повторов`;
+    isNotProgressing() {
+        if (this.steps < MIN_STEPS_FOR_PROGRESS ||
+            this.distanceHistory.length < this.maxDistanceHistory) {
+            return false;
+        }
+
+        const halfLength = Math.floor(this.distanceHistory.length / 2);
+        const firstHalf  = this.distanceHistory.slice(0, halfLength);
+        const secondHalf = this.distanceHistory.slice(-halfLength);
+
+        const avgFirst  = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+        const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+
+        // Нет прогресса: расстояние не уменьшилось хотя бы на 5%
+        return avgSecond >= avgFirst * PROGRESS_THRESHOLD;
+    }
+
+    /**
+     * Обнаружить избыточные повторные посещения клеток.
+     * Если более 70% шагов — повторные визиты, агент неэффективен.
+     * @returns {boolean}
+     */
+    isTooRepetitive() {
+        if (this.steps < MIN_STEPS_FOR_REPEAT) {
+            return false;
+        }
+
+        const uniqueCells    = this.visited.size;
+        const repeatedVisits = this.steps - uniqueCells;
+        const repeatRate     = repeatedVisits / this.steps;
+
+        return repeatRate > REPEAT_RATE_THRESHOLD;
     }
 
     /**
      * Проверить, завершён ли эпизод.
+     * Использует набор умных детекторов вместо жёсткого maxSteps.
      * @returns {boolean}
      */
     isDone() {
-        return this.reached ||
-               this.isStuck() ||
-               this.steps >= this.currentMaxSteps;
-    }
-
-    /**
-     * Получить причину завершения эпизода (для UI и логов).
-     * @returns {{reason: string, icon: string, color: string}}
-     */
-    getEpisodeEndReason() {
+        // 1. Успешное достижение цели
         if (this.reached) {
-            return {
-                reason: `Цель достигнута за ${this.steps} шагов`,
-                icon:   '🎯',
-                color:  '#10b981',
-            };
-        } else if (this.isStuck()) {
-            return {
-                reason: `Застрял на ${this.steps} шагах (${this.getStuckReason()})`,
-                icon:   '🔄',
-                color:  '#f59e0b',
-            };
-        } else {
-            return {
-                reason: `Лимит шагов (${this.currentMaxSteps})`,
-                icon:   '⏱️',
-                color:  '#6366f1',
-            };
-        }
-    }
-
-    /**
-     * Обновить currentMaxSteps на основе результатов завершённого эпизода.
-     * Должен вызываться в начале reset() (до super.reset, чтобы this.reached актуален).
-     */
-    updateMaxSteps() {
-        const prevMaxSteps = this.currentMaxSteps;
-
-        if (this.reached) {
-            // ✅ Успех — уменьшаем лимит
-            this.successCount++;
-            this.consecutiveFailures = 0;
-
-            // Уменьшаем каждые SUCCESS_REDUCTION_INTERVAL успехов
-            if (this.successCount % SUCCESS_REDUCTION_INTERVAL === 0) {
-                this.currentMaxSteps = Math.max(
-                    this.minMaxSteps,
-                    Math.floor(this.currentMaxSteps * 0.85),
-                );
-            }
-
-            // Более агрессивное уменьшение при стабильных успехах
-            if (this.successCount >= 20 && this.currentMaxSteps > this.minMaxSteps * 1.5) {
-                this.currentMaxSteps = Math.max(
-                    this.minMaxSteps,
-                    Math.floor(this.currentMaxSteps * 0.9),
-                );
-            }
-
-        } else if (this.isStuck()) {
-            // 🔄 Застрял — мягкое уменьшение (не тратить время на долгие циклы)
-            this.currentMaxSteps = Math.max(
-                this.minMaxSteps,
-                Math.floor(this.currentMaxSteps * 0.95),
-            );
-
-        } else {
-            // ❌ Таймаут — увеличиваем лимит после 10 неудач подряд
-            this.consecutiveFailures++;
-
-            if (this.consecutiveFailures >= FAILURE_INCREASE_THRESHOLD) {
-                this.currentMaxSteps = Math.min(
-                    this.baseMaxSteps,
-                    Math.floor(this.currentMaxSteps * 1.2),
-                );
-                this.consecutiveFailures = 0;
-                console.warn(`⚠️ MaxSteps увеличен до ${this.currentMaxSteps} (10 неудач подряд)`);
-            }
+            this.terminationReasons.success++;
+            console.log(`✅ Эпизод ${this.episodeCount}: Цель достигнута за ${this.steps} шагов!`);
+            return true;
         }
 
-        // Логирование изменений
-        if (prevMaxSteps !== this.currentMaxSteps) {
-            this.maxStepsHistory.push({
-                episode:  this.totalEpisodes,
-                oldValue: prevMaxSteps,
-                newValue: this.currentMaxSteps,
-                reason:   this.reached ? 'success' : (this.isStuck() ? 'stuck' : 'failures'),
-            });
-            console.log(`📊 MaxSteps: ${prevMaxSteps} → ${this.currentMaxSteps}`);
+        // 2. Застрял в цикле
+        if (this.isStuckInLoop()) {
+            this.terminationReasons.stuck++;
+            console.warn(`🔄 Эпизод ${this.episodeCount}: Зацикливание обнаружено (${this.steps} шагов, ${this.visited.size} уникальных клеток)`);
+            return true;
         }
+
+        // 3. Нет прогресса к цели
+        if (this.isNotProgressing()) {
+            this.terminationReasons.noProgress++;
+            console.warn(`📉 Эпизод ${this.episodeCount}: Нет прогресса к цели (${this.steps} шагов, расстояние: ${this._distToGoal().toFixed(1)})`);
+            return true;
+        }
+
+        // 4. Слишком много повторных посещений
+        if (this.isTooRepetitive()) {
+            this.terminationReasons.repetitive++;
+            const repeatRate = ((this.steps - this.visited.size) / this.steps * 100).toFixed(0);
+            console.warn(`🔁 Эпизод ${this.episodeCount}: Избыточные повторы (${this.steps} шагов, ${repeatRate}% повторов)`);
+            return true;
+        }
+
+        // 5. Аварийный лимит (страховка от зависания)
+        if (this.steps >= EMERGENCY_STEP_LIMIT) {
+            this.terminationReasons.emergency++;
+            console.error(`⚠️ Эпизод ${this.episodeCount}: АВАРИЙНОЕ ЗАВЕРШЕНИЕ (${EMERGENCY_STEP_LIMIT} шагов)!`);
+            return true;
+        }
+
+        return false;
     }
 
     // ── Глобальная память ─────────────────────────────────────────────────────
 
     /**
-     * Сбросить состояние эпизода, НО сохранить глобальную память.
+     * Сбросить состояние эпизода, НО сохранить глобальную память и статистику.
      * @param {{x:number,y:number}} startPos
      */
     reset(startPos) {
-        // 1. Сохраняем глобальную память и статистику ДО вызова parent.reset()
-        const globalVisited    = this.globalVisited;
-        const globalVisitCount = this.globalVisitCount;
-        const episodeCount     = this.episodeCount;
+        // 1. Сохраняем данные, которые не должны сбрасываться
+        const globalVisited       = this.globalVisited;
+        const globalVisitCount    = this.globalVisitCount;
+        const episodeCount        = this.episodeCount;
+        const terminationReasons  = this.terminationReasons;
+        const totalEpisodes       = this.totalEpisodes;
+        const successfulEpisodes  = this.successfulEpisodes;
+        const wasReached          = this.reached;
 
-        // 2. Сохраняем причину завершения эпизода (перед super.reset сбрасывает состояние)
-        // steps > 0 исключает первый вызов из setEnvironment (инициализация)
-        if (this.steps > 0) {
-            this.episodeReasons.push(this.getEpisodeEndReason());
-            if (this.episodeReasons.length > MAX_EPISODE_HISTORY) {
-                this.episodeReasons.shift();
-            }
-        }
-
-        // 3. Адаптируем maxSteps на основе результатов завершённого эпизода
-        // steps > 0 исключает первый вызов из setEnvironment (инициализация)
-        if (this.steps > 0) {
-            this.updateMaxSteps();
-        }
-
-        // 4. Вызываем родительский reset (стирает локальную память)
+        // 2. Вызываем родительский reset (стирает локальную память)
         super.reset(startPos);
 
-        // 5. Восстанавливаем глобальную память
-        this.globalVisited    = globalVisited;
-        this.globalVisitCount = globalVisitCount;
-        this.episodeCount     = episodeCount + 1;
-        this.totalEpisodes++;
+        // 3. Восстанавливаем глобальные данные
+        this.globalVisited      = globalVisited;
+        this.globalVisitCount   = globalVisitCount;
+        this.terminationReasons = terminationReasons;
+        this.episodeCount       = episodeCount + 1;
+        this.totalEpisodes      = totalEpisodes + 1;
+        this.successfulEpisodes = wasReached ? successfulEpisodes + 1 : successfulEpisodes;
 
-        // 6. Затухание памяти каждые 50 эпизодов
+        // 4. Затухание памяти каждые 50 эпизодов
         if (this.episodeCount % 50 === 0) {
             this.decayGlobalMemory(0.7);
         }
 
-        // 7. Обнулить награду эпизода
+        // 5. Сбрасываем детекторы для нового эпизода
+        this.recentPositions = [];
+        this.distanceHistory = [];
+        this.prevPos = { ...startPos };
+
+        // 6. Обнулить награду эпизода
         this.episodeReward = 0;
-    }
 
-    // ── Статистика адаптивного maxSteps ──────────────────────────────────────
-
-    /**
-     * Получить статистику адаптации maxSteps.
-     * @returns {{current: number, min: number, max: number, changes: number, successRate: string}}
-     */
-    getMaxStepsStats() {
-        return {
-            current:     this.currentMaxSteps,
-            min:         this.minMaxSteps,
-            max:         this.baseMaxSteps,
-            changes:     this.maxStepsHistory.length,
-            successRate: this.totalEpisodes > 0
-                ? (this.successCount / this.totalEpisodes * 100).toFixed(1)
-                : '0',
-        };
+        // 7. Логируем статистику каждые 10 эпизодов
+        if (this.episodeCount % 10 === 0) {
+            this.logTerminationStats();
+        }
     }
 
     /**
-     * Получить статистику причин завершения за последние N эпизодов.
-     * @param {number} [n=20]
-     * @returns {{goal: number, stuck: number, timeout: number}}
+     * Получить статистику причин завершения эпизодов.
+     * @returns {Object}
      */
-    getEpisodeEndStats(n = 20) {
-        const recent = this.episodeReasons.slice(-n);
-        return {
-            goal:    recent.filter(r => r.icon === '🎯').length,
-            stuck:   recent.filter(r => r.icon === '🔄').length,
-            timeout: recent.filter(r => r.icon === '⏱️').length,
-        };
+    getTerminationStats() {
+        const total = this.totalEpisodes;
+        const stats = {};
+
+        for (const [reason, count] of Object.entries(this.terminationReasons)) {
+            stats[reason] = {
+                count,
+                percent: total > 0 ? ((count / total) * 100).toFixed(1) : '0.0',
+            };
+        }
+
+        stats.total       = total;
+        stats.successRate = total > 0
+            ? ((this.successfulEpisodes / total) * 100).toFixed(1)
+            : '0.0';
+
+        return stats;
+    }
+
+    /**
+     * Логировать статистику причин завершения в консоль.
+     */
+    logTerminationStats() {
+        const stats = this.getTerminationStats();
+        console.log(
+            `\n📊 Статистика после ${stats.total} эпизодов:\n` +
+            `   ✅ Успех: ${stats.success.count} (${stats.success.percent}%)\n` +
+            `   🔄 Циклы: ${stats.stuck.count} (${stats.stuck.percent}%)\n` +
+            `   📉 Нет прогресса: ${stats.noProgress.count} (${stats.noProgress.percent}%)\n` +
+            `   🔁 Повторы: ${stats.repetitive.count} (${stats.repetitive.percent}%)\n` +
+            `   ⚠️ Аварийные: ${stats.emergency.count} (${stats.emergency.percent}%)\n` +
+            `\n   🎯 Success rate: ${stats.successRate}%`,
+        );
     }
 
     /**
@@ -393,17 +405,33 @@ export class RLAgent extends Agent {
     }
 
     /**
-     * Переопределяем move() чтобы обновлять глобальную память.
+     * Переопределяем move() для трекинга позиций, расстояний и глобальной памяти.
      * @param {number} actionIndex
      */
     move(actionIndex) {
-        const prevPos = { ...this.pos };
+        this.prevPos = { ...this.pos };
 
         super.move(actionIndex);
 
         // Обновить глобальную память только если движение было успешным
-        if (this.pos.x !== prevPos.x || this.pos.y !== prevPos.y) {
+        if (this.pos.x !== this.prevPos.x || this.pos.y !== this.prevPos.y) {
             this.updateGlobalMemory(this.pos.x, this.pos.y);
+        }
+
+        // Записываем позицию для обнаружения зацикливания
+        const posKey = `${this.pos.x},${this.pos.y}`;
+        this.recentPositions.push(posKey);
+        if (this.recentPositions.length > this.maxRecentPositions) {
+            this.recentPositions.shift();
+        }
+
+        // Записываем расстояние до цели каждые DISTANCE_SAMPLE_INTERVAL шагов
+        if (this.steps % DISTANCE_SAMPLE_INTERVAL === 0) {
+            const dist = this._distToGoal();
+            this.distanceHistory.push(dist);
+            if (this.distanceHistory.length > this.maxDistanceHistory) {
+                this.distanceHistory.shift();
+            }
         }
     }
 
