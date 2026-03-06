@@ -219,16 +219,12 @@ function updateRL() {
 
     const state_t1 = agent.getInputs();
 
-    // Используем адаптивный метод вместо config.maxSteps
+    // Используем умные детекторы вместо maxSteps
     const done = agent.isDone();
 
     agent.remember(state_t, action, stepReward, state_t1, done);
 
     if (done) {
-        // Логирование причины завершения
-        const endReason = agent.getEpisodeEndReason();
-        console.log(`Эпизод ${state.generation}: ${endReason.icon} ${endReason.reason}`);
-
         agent.replay(32);
         agent.updateEpsilon();
 
@@ -240,7 +236,6 @@ function updateRL() {
         // Обновить график
         chart.update(state.generation, [agent]);
 
-        // Сброс с адаптацией maxSteps
         agent.reset(state.start);
         state.generation++;
     }
@@ -331,40 +326,29 @@ function updateUI() {
                     `Макс: <strong>${stats.maxVisits}</strong>`;
             }
 
-            // Отображение адаптивного maxSteps
-            if (agent.currentMaxSteps !== undefined) {
-                const maxStats  = agent.getMaxStepsStats();
-                const endStats  = agent.getEpisodeEndStats(20);
-                const range     = maxStats.max - maxStats.min;
-                const progress  = range > 0
-                    ? ((maxStats.max - maxStats.current) / range * 100).toFixed(1)
-                    : '0';
+            // Отображение статистики завершений
+            if (agent.getTerminationStats) {
+                const stats = agent.getTerminationStats();
 
-                let adaptiveStatsDisplay = document.getElementById('adaptiveStatsDisplay');
-                if (!adaptiveStatsDisplay) {
-                    adaptiveStatsDisplay = document.createElement('div');
-                    adaptiveStatsDisplay.id = 'adaptiveStatsDisplay';
-                    adaptiveStatsDisplay.style.cssText =
-                        'margin-top:0.5rem;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;font-size:0.85rem;';
-                    document.getElementById('epsilonRow').parentElement.appendChild(adaptiveStatsDisplay);
+                let terminationStats = document.getElementById('terminationStats');
+                if (!terminationStats) {
+                    terminationStats = document.createElement('div');
+                    terminationStats.id = 'terminationStats';
+                    terminationStats.style.cssText =
+                        'margin-top:0.5rem;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;font-size:0.85rem;line-height:1.6;';
+                    document.getElementById('epsilonRow').parentElement.appendChild(terminationStats);
                 }
 
-                adaptiveStatsDisplay.innerHTML = `
-                    <div style="margin-bottom:0.25rem;color:rgba(255,255,255,0.9);">
-                        <strong>🎯 MaxSteps:</strong> ${maxStats.current}
-                        <span style="color:rgba(255,255,255,0.6);font-size:0.8em;">
-                            (${maxStats.min} – ${maxStats.max})
-                        </span>
-                    </div>
-                    <div style="background:rgba(0,0,0,0.2);height:4px;border-radius:2px;margin-bottom:0.5rem;">
-                        <div style="background:linear-gradient(90deg,#667eea,#10b981);height:100%;width:${progress}%;border-radius:2px;"></div>
-                    </div>
-                    <div style="display:flex;gap:1rem;font-size:0.8em;color:rgba(255,255,255,0.7);">
-                        <span>🎯 ${endStats.goal}</span>
-                        <span>🔄 ${endStats.stuck}</span>
-                        <span>⏱️ ${endStats.timeout}</span>
-                        <span style="margin-left:auto;">✅ ${maxStats.successRate}%</span>
-                    </div>`;
+                terminationStats.innerHTML =
+                    `<strong style="color:rgba(255,255,255,0.9);">📊 Причины завершения (${stats.total} эп.):</strong><br>` +
+                    `<span style="color:#10b981;">✅ Успех: ${stats.success.count} (${stats.success.percent}%)</span><br>` +
+                    `<span style="color:#f59e0b;">🔄 Циклы: ${stats.stuck.count} (${stats.stuck.percent}%)</span><br>` +
+                    `<span style="color:#ef4444;">📉 Нет прогресса: ${stats.noProgress.count} (${stats.noProgress.percent}%)</span><br>` +
+                    `<span style="color:#8b5cf6;">🔁 Повторы: ${stats.repetitive.count} (${stats.repetitive.percent}%)</span>` +
+                    (stats.emergency.count > 0
+                        ? `<br><span style="color:#dc2626;">⚠️ Аварийные: ${stats.emergency.count}</span>`
+                        : '') +
+                    `<br><br><strong style="color:#10b981;">🎯 Success rate: ${stats.successRate}%</strong>`;
             }
         }
     }
