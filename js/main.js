@@ -112,7 +112,20 @@ function initGenetic() {
 }
 
 function initRL() {
-    state.rlAgent = new RLAgent(config.hiddenSize);
+    const hiddenLayersInput = document.getElementById('hiddenLayers')?.value || '64,32';
+    let hiddenLayers = hiddenLayersInput.split(',').map(x => parseInt(x.trim(), 10)).filter(n => Number.isFinite(n) && n > 0);
+    if (hiddenLayers.length === 0) hiddenLayers = [64, 32]; // fallback default
+    const useDueling           = document.getElementById('useDueling')?.checked ?? false;
+    const useDoubleDQN         = document.getElementById('useDoubleDQN')?.checked ?? true;
+    const usePrioritizedReplay = document.getElementById('usePrioritizedReplay')?.checked ?? true;
+    const learningRate         = parseFloat(document.getElementById('learningRate')?.value ?? '0.001');
+
+    state.rlAgent = new RLAgent(hiddenLayers, {
+        dueling:           useDueling,
+        doubleDQN:         useDoubleDQN,
+        prioritizedReplay: usePrioritizedReplay,
+        learningRate:      learningRate,
+    });
     state.rlAgent.setEnvironment(state.maze, state.start, state.goal);
     state.generation = 0;
     state.bestFitness = -Infinity;
@@ -199,13 +212,14 @@ function updateRL() {
     const state_t = agent.getInputs();
     const action  = agent.act(state_t);
 
+    const fitnessBefore = agent.fitness;
     agent.move(action);
+    const stepReward = agent.fitness - fitnessBefore;
 
     const state_t1 = agent.getInputs();
-    const reward   = 0; // уже накоплено в agent.fitness
     const done     = agent.reached || agent.steps >= config.maxSteps;
 
-    agent.remember(state_t, action, reward, state_t1, done);
+    agent.remember(state_t, action, stepReward, state_t1, done);
 
     if (done) {
         agent.replay(32);
@@ -339,6 +353,10 @@ function changeMode(mode) {
     const epsilonRow = document.getElementById('epsilonRow');
     if (epsilonRow) epsilonRow.style.display = mode === 'rl' ? 'flex' : 'none';
 
+    // Показать/скрыть панель архитектуры нейросети
+    const nnArchPanel = document.getElementById('nnArchPanel');
+    if (nnArchPanel) nnArchPanel.style.display = mode === 'rl' ? 'block' : 'none';
+
     resetTraining();
 }
 
@@ -467,4 +485,14 @@ window.addEventListener('DOMContentLoaded', () => {
             });
         }
     });
+
+    // Learning rate ползунок (RL)
+    const lrEl = document.getElementById('learningRate');
+    if (lrEl) {
+        lrEl.addEventListener('input', () => {
+            const val = parseFloat(lrEl.value).toFixed(4);
+            const lrValEl = document.getElementById('lrValue');
+            if (lrValEl) lrValEl.textContent = val;
+        });
+    }
 });

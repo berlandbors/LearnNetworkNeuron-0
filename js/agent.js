@@ -7,7 +7,7 @@
 import { NeuralNetwork } from './neural-network.js';
 
 /** Размер входного вектора (должен совпадать с getInputs()) */
-export const INPUT_SIZE = 24;
+export const INPUT_SIZE = 32;
 /** Количество возможных действий: вверх, вниз, влево, вправо */
 export const OUTPUT_SIZE = 4;
 
@@ -70,6 +70,9 @@ export class Agent {
         /** Посещённые клетки */
         this.visited = new Set();
 
+        /** Счётчик посещений каждой клетки (key → count) */
+        this.visitCount = new Map();
+
         /** Последние 4 действия (one-hot: 4×4=16 бит) */
         this.lastActions = [0, 0, 0, 0];
 
@@ -102,6 +105,7 @@ export class Agent {
         this.reached = false;
         this.path = [{ ...this.pos }];
         this.visited = new Set([`${this.pos.x},${this.pos.y}`]);
+        this.visitCount = new Map([[`${this.pos.x},${this.pos.y}`, 1]]);
         this.lastActions = [0, 0, 0, 0];
         this.startDist = this._distToGoal();
         this.minDistToGoal = this.startDist;
@@ -142,7 +146,7 @@ export class Agent {
 
     /**
      * Получить входной вектор для нейронной сети.
-     * Размерность: INPUT_SIZE = 24
+     * Размерность: INPUT_SIZE = 32
      *
      * [0..7]  - 8 расстояний до стен (нормализованных)
      * [8..9]  - нормализованная позиция агента (x/w, y/h)
@@ -152,6 +156,8 @@ export class Agent {
      * [15..18] - последние 4 действия (one-hot)
      * [19..22] - стена слева/справа/сверху/снизу (0/1)
      * [23]    - нормализованное количество шагов
+     * [24..27] - посещены ли соседние клетки (4 направления)
+     * [28..31] - доля посещённых клеток в 4 квадрантах (3×3 окрестность)
      * @returns {number[]}
      */
     getInputs() {
@@ -199,6 +205,51 @@ export class Agent {
         // 8. Нормализованное количество шагов (будем нормировать на 500)
         inputs.push(Math.min(this.steps / 500, 1));
 
+        // 7b. Посещены ли соседние клетки (4 направления)
+        for (const { dy: ddy, dx: ddx } of DIRECTIONS) {
+            const ny = this.pos.y + ddy;
+            const nx = this.pos.x + ddx;
+            const isVisited = this.visited.has(`${nx},${ny}`) ? 1 : 0;
+            inputs.push(isVisited);
+        }
+
+        // 7c. Локальная карта посещений вокруг (4 квадранта 2×2)
+        // Квадрант вверх-слева (dy: -2..-1, dx: -2..-1)
+        let visitedUpLeft = 0;
+        for (let qdy = -2; qdy <= -1; qdy++) {
+            for (let qdx = -2; qdx <= -1; qdx++) {
+                if (this.visited.has(`${this.pos.x + qdx},${this.pos.y + qdy}`)) visitedUpLeft++;
+            }
+        }
+        inputs.push(Math.min(visitedUpLeft / 4, 1));
+
+        // Квадрант вверх-справа (dy: -2..-1, dx: 1..2)
+        let visitedUpRight = 0;
+        for (let qdy = -2; qdy <= -1; qdy++) {
+            for (let qdx = 1; qdx <= 2; qdx++) {
+                if (this.visited.has(`${this.pos.x + qdx},${this.pos.y + qdy}`)) visitedUpRight++;
+            }
+        }
+        inputs.push(Math.min(visitedUpRight / 4, 1));
+
+        // Квадрант вниз-слева (dy: 1..2, dx: -2..-1)
+        let visitedDownLeft = 0;
+        for (let qdy = 1; qdy <= 2; qdy++) {
+            for (let qdx = -2; qdx <= -1; qdx++) {
+                if (this.visited.has(`${this.pos.x + qdx},${this.pos.y + qdy}`)) visitedDownLeft++;
+            }
+        }
+        inputs.push(Math.min(visitedDownLeft / 4, 1));
+
+        // Квадрант вниз-справа (dy: 1..2, dx: 1..2)
+        let visitedDownRight = 0;
+        for (let qdy = 1; qdy <= 2; qdy++) {
+            for (let qdx = 1; qdx <= 2; qdx++) {
+                if (this.visited.has(`${this.pos.x + qdx},${this.pos.y + qdy}`)) visitedDownRight++;
+            }
+        }
+        inputs.push(Math.min(visitedDownRight / 4, 1));
+
         return inputs;
     }
 
@@ -244,6 +295,8 @@ export class Agent {
             this.pos = { x: nx, y: ny };
             this.path.push({ ...this.pos });
             this.visited.add(`${nx},${ny}`);
+            const key = `${nx},${ny}`;
+            this.visitCount.set(key, (this.visitCount.get(key) ?? 0) + 1);
         }
 
         // Обновить последние действия
@@ -285,19 +338,31 @@ export class Agent {
         if (distDelta > 0) {
             reward += 10 * distDelta;
         } else {
-            reward += 5 * distDelta; // отрицательно
+            reward += 5 * distDelta; // штраф за отдаление
         }
 
         // Штраф за столкновение со стеной
-        if (blocked) reward -= 10;
+        if (blocked) {
+            reward -= 20;
+        }
+
+        // Exploration bonus: награда за новую клетку / прогрессивный штраф за повторное посещение
+        const visitCount = this.visitCount.get(`${this.pos.x},${this.pos.y}`) ?? 1;
+        if (visitCount === 1 && !blocked) {
+            reward += 5; // бонус за первое посещение
+        } else if (visitCount > 1) {
+            reward -= 10 * Math.min(visitCount - 1, 5); // прогрессивный штраф
+        }
+
+        // Curiosity bonus: награда за исследование далёких от старта областей
+        const explorationRadius = Math.sqrt(
+            Math.pow(this.pos.x - this.path[0].x, 2) +
+            Math.pow(this.pos.y - this.path[0].y, 2)
+        );
+        reward += explorationRadius * 0.1;
 
         // Штраф за каждый шаг
         reward -= 0.1;
-
-        // Штраф за посещённую клетку
-        const key = `${this.pos.x},${this.pos.y}`;
-        const visits = [...this.visited].filter(k => k === key).length;
-        if (visits > 1) reward -= 2;
 
         return reward;
     }

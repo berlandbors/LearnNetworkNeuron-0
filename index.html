@@ -61,6 +61,47 @@
                 </div>
             </div>
 
+            <!-- Архитектура нейросети -->
+            <div class="panel" id="nnArchPanel" style="margin-top:0.85rem; display:none;">
+                <h3>Архитектура нейросети</h3>
+                <div class="settings-list">
+                    <div class="setting-row">
+                        <label>
+                            Скрытые слои
+                            <small style="display:block;color:#888;">(через запятую, напр. 64,32)</small>
+                        </label>
+                        <input type="text" id="hiddenLayers" value="64,32"
+                               style="width:100%;padding:0.2rem 0.4rem;border:1px solid #ccc;border-radius:4px;" />
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="useDueling" />
+                            Dueling DQN
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="useDoubleDQN" checked />
+                            Double DQN
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="usePrioritizedReplay" checked />
+                            Prioritized Replay
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            Learning Rate
+                            <span id="lrValue">0.001</span>
+                        </label>
+                        <input type="range" id="learningRate"
+                               min="0.0001" max="0.01" step="0.0001" value="0.001" />
+                    </div>
+                </div>
+            </div>
+
         </aside>
 
         <!-- ── Центр: canvas ──────────────────────────────────── -->
