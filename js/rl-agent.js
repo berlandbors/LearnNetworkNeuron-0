@@ -88,6 +88,100 @@ export class RLAgent extends Agent {
 
         /** История наград по эпизодам */
         this.rewardHistory = [];
+
+        /** Глобальная карта посещений (не сбрасывается между эпизодами) */
+        this.globalVisited = new Set();
+        this.globalVisitCount = new Map();
+
+        /** Счётчик эпизодов для статистики */
+        this.episodeCount = 0;
+
+        /** История эффективности исследования (% новых клеток за эпизод) */
+        this.explorationEfficiency = [];
+    }
+
+    // ── Глобальная память ─────────────────────────────────────────────────────
+
+    /**
+     * Сбросить состояние эпизода, НО сохранить глобальную память.
+     * @param {{x:number,y:number}} startPos
+     */
+    reset(startPos) {
+        // 1. Сохраняем глобальную память ДО вызова parent.reset()
+        const globalVisited    = this.globalVisited;
+        const globalVisitCount = this.globalVisitCount;
+        const episodeCount     = this.episodeCount;
+
+        // 2. Вызываем родительский reset (стирает локальную память)
+        super.reset(startPos);
+
+        // 3. Восстанавливаем глобальную память
+        this.globalVisited    = globalVisited;
+        this.globalVisitCount = globalVisitCount;
+        this.episodeCount     = episodeCount + 1;
+
+        // 4. Затухание памяти каждые 50 эпизодов
+        if (this.episodeCount % 50 === 0) {
+            this.decayGlobalMemory(0.7);
+        }
+
+        // 5. Обнулить награду эпизода
+        this.episodeReward = 0;
+    }
+
+    /**
+     * Обновить глобальную память при посещении клетки.
+     * @param {number} x
+     * @param {number} y
+     */
+    updateGlobalMemory(x, y) {
+        const key = `${x},${y}`;
+        this.globalVisited.add(key);
+        this.globalVisitCount.set(key, (this.globalVisitCount.get(key) ?? 0) + 1);
+    }
+
+    /**
+     * Затухание глобальной памяти (уменьшить счётчики посещений).
+     * @param {number} factor - коэффициент затухания (0.7 = уменьшить на 30%)
+     */
+    decayGlobalMemory(factor = 0.5) {
+        for (const [key, count] of this.globalVisitCount.entries()) {
+            const newCount = Math.floor(count * factor);
+            if (newCount === 0) {
+                this.globalVisitCount.delete(key);
+                this.globalVisited.delete(key);
+            } else {
+                this.globalVisitCount.set(key, newCount);
+            }
+        }
+    }
+
+    /**
+     * Получить статистику глобальной памяти.
+     * @returns {{totalCells: number, avgVisits: number, maxVisits: number}}
+     */
+    getGlobalMemoryStats() {
+        const visits = Array.from(this.globalVisitCount.values());
+        return {
+            totalCells: this.globalVisited.size,
+            avgVisits:  visits.length > 0 ? visits.reduce((a, b) => a + b, 0) / visits.length : 0,
+            maxVisits:  visits.length > 0 ? Math.max(...visits) : 0,
+        };
+    }
+
+    /**
+     * Переопределяем move() чтобы обновлять глобальную память.
+     * @param {number} actionIndex
+     */
+    move(actionIndex) {
+        const prevPos = { ...this.pos };
+
+        super.move(actionIndex);
+
+        // Обновить глобальную память только если движение было успешным
+        if (this.pos.x !== prevPos.x || this.pos.y !== prevPos.y) {
+            this.updateGlobalMemory(this.pos.x, this.pos.y);
+        }
     }
 
     // ── Experience Replay ──────────────────────────────────────────────────────

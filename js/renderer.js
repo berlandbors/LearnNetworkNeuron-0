@@ -321,4 +321,25 @@ export class Renderer {
         this.canvas.width  = maze[0].length * cellSize;
         this.canvas.height = maze.length    * cellSize;
     }
+
+    /**
+     * Нарисовать тепловую карту глобальной памяти (интенсивность посещений).
+     * @param {Map<string,number>} globalVisitCount
+     */
+    drawGlobalMemoryHeatmap(globalVisitCount) {
+        if (!globalVisitCount || globalVisitCount.size === 0) return;
+
+        const { ctx, cellSize: cs, maze } = this;
+        const maxVisits = Math.max(...globalVisitCount.values());
+
+        for (const [key, count] of globalVisitCount.entries()) {
+            const [x, y] = key.split(',').map(Number);
+
+            if (maze[y] && maze[y][x] === 0) {
+                const intensity = count / maxVisits;
+                ctx.fillStyle = `rgba(255, 150, 0, ${intensity * 0.3})`;
+                ctx.fillRect(x * cs, y * cs, cs, cs);
+            }
+        }
+    }
 }
