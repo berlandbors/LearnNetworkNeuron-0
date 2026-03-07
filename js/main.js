@@ -301,7 +301,7 @@ function updateUI() {
         const agent = state.rlAgent;
         if (agent) {
             document.getElementById('currentAgentVal').textContent = 'RL';
-            document.getElementById('stepsVal').textContent = agent.steps;
+            document.getElementById('stepsVal').textContent = `${agent.steps} / ${agent.getCurrentMaxSteps()}`;
             document.getElementById('reachedVal').textContent = agent.reached ? '✅' : '❌';
             document.getElementById('epsilonVal').textContent =
                 agent.epsilon !== undefined ? agent.epsilon.toFixed(3) : '—';
@@ -326,29 +326,28 @@ function updateUI() {
                     `Макс: <strong>${stats.maxVisits}</strong>`;
             }
 
-            // Отображение статистики завершений
-            if (agent.getTerminationStats) {
-                const stats = agent.getTerminationStats();
+            // Отображение статистики адаптивного maxSteps
+            if (agent.getAdaptiveStats) {
+                const stats = agent.getAdaptiveStats();
 
-                let terminationStats = document.getElementById('terminationStats');
-                if (!terminationStats) {
-                    terminationStats = document.createElement('div');
-                    terminationStats.id = 'terminationStats';
-                    terminationStats.style.cssText =
+                let adaptiveStats = document.getElementById('adaptiveStats');
+                if (!adaptiveStats) {
+                    adaptiveStats = document.createElement('div');
+                    adaptiveStats.id = 'adaptiveStats';
+                    adaptiveStats.style.cssText =
                         'margin-top:0.5rem;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;font-size:0.85rem;line-height:1.6;';
-                    document.getElementById('epsilonRow').parentElement.appendChild(terminationStats);
+                    document.getElementById('epsilonRow').parentElement.appendChild(adaptiveStats);
                 }
 
-                terminationStats.innerHTML =
-                    `<strong style="color:rgba(255,255,255,0.9);">📊 Причины завершения (${stats.total} эп.):</strong><br>` +
-                    `<span style="color:#10b981;">✅ Успех: ${stats.success.count} (${stats.success.percent}%)</span><br>` +
-                    `<span style="color:#f59e0b;">🔄 Циклы: ${stats.stuck.count} (${stats.stuck.percent}%)</span><br>` +
-                    `<span style="color:#ef4444;">📉 Нет прогресса: ${stats.noProgress.count} (${stats.noProgress.percent}%)</span><br>` +
-                    `<span style="color:#8b5cf6;">🔁 Повторы: ${stats.repetitive.count} (${stats.repetitive.percent}%)</span>` +
-                    (stats.emergency.count > 0
-                        ? `<br><span style="color:#dc2626;">⚠️ Аварийные: ${stats.emergency.count}</span>`
+                adaptiveStats.innerHTML =
+                    `<strong style="color:rgba(255,255,255,0.9);">📊 Адаптивное обучение:</strong><br>` +
+                    `<span style="color:#10b981;">✅ Успехов: ${stats.totalSuccesses} / ${stats.totalEpisodes} (${stats.successRate}%)</span><br>` +
+                    `<span style="color:#f59e0b;">🔥 Подряд успехов: ${stats.successStreak}</span><br>` +
+                    (stats.failureStreak > 0
+                        ? `<span style="color:#ef4444;">❌ Подряд неудач: ${stats.failureStreak}</span><br>`
                         : '') +
-                    `<br><br><strong style="color:#10b981;">🎯 Success rate: ${stats.successRate}%</strong>`;
+                    `<span style="color:#8b5cf6;">🎯 Текущий лимит: ${stats.currentMaxSteps} шагов</span><br>` +
+                    `<span style="color:rgba(255,255,255,0.7);">📏 Ср. длина (20 эп.): ${stats.avgSteps} шагов</span>`;
             }
         }
     }
