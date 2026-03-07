@@ -197,17 +197,17 @@
 
                     <div class="setting-row">
                         <label>
-                            Макс. шагов (только для Genetic)
+                            Макс. шагов
                             <span id="maxStepsVal">400</span>
                         </label>
                         <input type="range" id="maxSteps"
                                min="100" max="1000" value="400" step="50">
                     </div>
 
-                    <!-- Подсказка для RL режима: maxSteps игнорируется -->
+                    <!-- Подсказка для RL режима: адаптивный maxSteps -->
                     <div id="maxStepsNote" style="display:none;font-size:0.75rem;color:rgba(255,255,255,0.6);margin:-0.5rem 0 1rem 0;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;">
                         <strong>Для RL режима:</strong> этот параметр игнорируется.<br>
-                        ℹ️ Используются умные детекторы завершения эпизода (аварийный лимит: 10&thinsp;000 шагов).
+                        ℹ️ Используется адаптивный лимит шагов (старт: 2&thinsp;000, мин: 300).
                     </div>
 
                 </div>

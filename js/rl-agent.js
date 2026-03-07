@@ -23,6 +23,8 @@ const EPSILON_MIN = 0.05;
 const EPSILON_DECAY = 0.995;
 /** Шаг обновления целевой сети */
 const TARGET_UPDATE_FREQ = 100;
+/** Отступ от лимита шагов для определения успешного эпизода в статистике */
+const SUCCESS_THRESHOLD_MARGIN = 10;
 
 export class RLAgent extends Agent {
     /**
@@ -95,35 +97,204 @@ export class RLAgent extends Agent {
 
         /** Счётчик эпизодов для статистики */
         this.episodeCount = 0;
+
+        /** История эффективности исследования (% новых клеток за эпизод) */
+        this.explorationEfficiency = [];
+
+        // ── Адаптивный maxSteps ───────────────────────────────────────────────
+
+        /** Начальный лимит шагов (для исследования) */
+        this.baseMaxSteps = 2000;
+        /** Минимальный лимит шагов (когда научился) */
+        this.minMaxSteps = 300;
+        /** Текущий лимит шагов */
+        this.currentMaxSteps = this.baseMaxSteps;
+
+        /** Подряд успешных эпизодов */
+        this.successStreak = 0;
+        /** Подряд неудачных эпизодов */
+        this.failureStreak = 0;
+        /** Всего успехов */
+        this.totalSuccesses = 0;
+        /** Всего эпизодов */
+        this.totalEpisodes = 0;
+
+        /** Длина последних 20 эпизодов */
+        this.episodeStepsHistory = [];
+        /** Размер окна истории эпизодов */
+        this.maxHistory = 20;
+    }
+
+    // ── Адаптивный maxSteps ───────────────────────────────────────────────────
+
+    /**
+     * Проверить, завершён ли эпизод.
+     * Использует адаптивный maxSteps вместо детекторов.
+     * @returns {boolean}
+     */
+    isDone() {
+        // ✅ Успешное завершение
+        if (this.reached) {
+            return true;
+        }
+
+        // ✅ Адаптивный лимит шагов
+        if (this.steps >= this.currentMaxSteps) {
+            return true;
+        }
+
+        return false;
     }
 
     // ── Глобальная память ─────────────────────────────────────────────────────
 
     /**
-     * Сбросить состояние эпизода, НО сохранить глобальную память и статистику.
+     * Сбросить состояние эпизода, сохранив глобальную память.
+     * Адаптировать maxSteps на основе результата эпизода.
      * @param {{x:number,y:number}} startPos
      */
     reset(startPos) {
-        // 1. Сохраняем данные, которые не должны сбрасываться
-        const globalVisited    = this.globalVisited;
-        const globalVisitCount = this.globalVisitCount;
-        const episodeCount     = this.episodeCount;
+        // 1. Сохраняем данные, которые НЕ должны сбрасываться
+        const globalVisited        = this.globalVisited;
+        const globalVisitCount     = this.globalVisitCount;
+        const baseMaxSteps         = this.baseMaxSteps;
+        const minMaxSteps          = this.minMaxSteps;
+        const currentMaxSteps      = this.currentMaxSteps;
+        const successStreak        = this.successStreak;
+        const failureStreak        = this.failureStreak;
+        const totalSuccesses       = this.totalSuccesses;
+        const totalEpisodes        = this.totalEpisodes;
+        const episodeStepsHistory  = this.episodeStepsHistory;
+        const wasReached           = this.reached;
+        const episodeCount         = this.episodeCount;
 
-        // 2. Вызываем родительский reset (стирает локальную память)
+        // Записываем длину эпизода в историю (пропускаем эпизод с 0 шагов)
+        if (this.steps > 0) {
+            episodeStepsHistory.push(this.steps);
+            if (episodeStepsHistory.length > this.maxHistory) {
+                episodeStepsHistory.shift();
+            }
+        }
+
+        // 2. Вызываем родительский reset (сбрасывает локальную память)
         super.reset(startPos);
 
         // 3. Восстанавливаем глобальные данные
-        this.globalVisited    = globalVisited;
-        this.globalVisitCount = globalVisitCount;
-        this.episodeCount     = episodeCount + 1;
+        this.globalVisited        = globalVisited;
+        this.globalVisitCount     = globalVisitCount;
+        this.baseMaxSteps         = baseMaxSteps;
+        this.minMaxSteps          = minMaxSteps;
+        this.episodeStepsHistory  = episodeStepsHistory;
 
         // 4. Затухание памяти каждые 50 эпизодов
-        if (this.episodeCount % 50 === 0) {
+        if ((episodeCount + 1) % 50 === 0) {
             this.decayGlobalMemory(0.7);
         }
 
-        // 5. Обнулить награду эпизода
+        // 5. ✅ Адаптируем maxSteps на основе результата
+        this.totalEpisodes = totalEpisodes + 1;
+
+        if (wasReached) {
+            // ✅ Успех — увеличиваем streak, уменьшаем лимит
+            this.totalSuccesses = totalSuccesses + 1;
+            this.successStreak  = successStreak + 1;
+            this.failureStreak  = 0;
+
+            // Уменьшаем лимит после каждых 3 успехов подряд
+            if (this.successStreak % 3 === 0) {
+                this.currentMaxSteps = Math.max(
+                    minMaxSteps,
+                    Math.floor(currentMaxSteps * 0.85),  // -15%
+                );
+                console.log(`✅ ${this.successStreak} успехов подряд! MaxSteps → ${this.currentMaxSteps}`);
+            } else {
+                this.currentMaxSteps = currentMaxSteps;
+            }
+        } else {
+            // ❌ Неудача — увеличиваем failureStreak
+            this.totalSuccesses = totalSuccesses;
+            this.successStreak  = 0;
+            this.failureStreak  = failureStreak + 1;
+
+            // Увеличиваем лимит после 10 неудач подряд
+            if (this.failureStreak >= 10) {
+                this.currentMaxSteps = Math.min(
+                    baseMaxSteps,
+                    Math.floor(currentMaxSteps * 1.2),  // +20%
+                );
+                this.failureStreak = 0;
+                console.warn(`⚠️ 10 неудач подряд. MaxSteps → ${this.currentMaxSteps}`);
+            } else {
+                this.currentMaxSteps = currentMaxSteps;
+            }
+        }
+
+        this.episodeCount  = episodeCount + 1;
         this.episodeReward = 0;
+
+        // 6. Логируем статистику каждые 10 эпизодов
+        if (this.episodeCount % 10 === 0) {
+            this.logStats();
+        }
+    }
+
+    /**
+     * Логировать статистику обучения.
+     */
+    logStats() {
+        const successRate = this.totalEpisodes > 0
+            ? ((this.totalSuccesses / this.totalEpisodes) * 100).toFixed(1)
+            : '0.0';
+
+        const avgSteps = this.episodeStepsHistory.length > 0
+            ? (this.episodeStepsHistory.reduce((a, b) => a + b, 0) / this.episodeStepsHistory.length).toFixed(0)
+            : '0';
+
+        const recentSuccesses = this.episodeStepsHistory.slice(-10).filter(steps =>
+            steps < this.currentMaxSteps - SUCCESS_THRESHOLD_MARGIN,
+        ).length;
+
+        console.log(
+            `\n📊 Статистика после ${this.totalEpisodes} эпизодов:\n` +
+            `   ✅ Успехов: ${this.totalSuccesses} (${successRate}%)\n` +
+            `   📈 Подряд успехов: ${this.successStreak}\n` +
+            `   📉 Подряд неудач: ${this.failureStreak}\n` +
+            `   🎯 CurrentMaxSteps: ${this.currentMaxSteps}\n` +
+            `   📏 Средняя длина (20 эп.): ${avgSteps} шагов\n` +
+            `   🔥 Успехов из последних 10: ${recentSuccesses}`,
+        );
+    }
+
+    /**
+     * Получить текущее значение maxSteps (для UI).
+     * @returns {number}
+     */
+    getCurrentMaxSteps() {
+        return this.currentMaxSteps;
+    }
+
+    /**
+     * Получить статистику для UI.
+     * @returns {Object}
+     */
+    getAdaptiveStats() {
+        const successRate = this.totalEpisodes > 0
+            ? ((this.totalSuccesses / this.totalEpisodes) * 100).toFixed(1)
+            : '0.0';
+
+        const avgSteps = this.episodeStepsHistory.length > 0
+            ? (this.episodeStepsHistory.reduce((a, b) => a + b, 0) / this.episodeStepsHistory.length).toFixed(0)
+            : '0';
+
+        return {
+            totalEpisodes:   this.totalEpisodes,
+            totalSuccesses:  this.totalSuccesses,
+            successRate:     successRate,
+            successStreak:   this.successStreak,
+            failureStreak:   this.failureStreak,
+            currentMaxSteps: this.currentMaxSteps,
+            avgSteps:        avgSteps,
+        };
     }
 
     /**
@@ -171,13 +342,12 @@ export class RLAgent extends Agent {
      * @param {number} actionIndex
      */
     move(actionIndex) {
-        const oldX = this.pos.x;
-        const oldY = this.pos.y;
+        const prevPos = { ...this.pos };
 
         super.move(actionIndex);
 
         // Обновить глобальную память только если движение было успешным
-        if (this.pos.x !== oldX || this.pos.y !== oldY) {
+        if (this.pos.x !== prevPos.x || this.pos.y !== prevPos.y) {
             this.updateGlobalMemory(this.pos.x, this.pos.y);
         }
     }

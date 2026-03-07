@@ -300,7 +300,7 @@ function updateUI() {
         const agent = state.rlAgent;
         if (agent) {
             document.getElementById('currentAgentVal').textContent = 'RL';
-            document.getElementById('stepsVal').textContent = agent.steps;
+            document.getElementById('stepsVal').textContent = `${agent.steps} / ${agent.getCurrentMaxSteps()}`;
             document.getElementById('reachedVal').textContent = agent.reached ? '✅' : '❌';
             document.getElementById('epsilonVal').textContent =
                 agent.epsilon !== undefined ? agent.epsilon.toFixed(3) : '—';
@@ -325,6 +325,29 @@ function updateUI() {
                     `Макс: <strong>${stats.maxVisits}</strong>`;
             }
 
+            // Отображение статистики адаптивного maxSteps
+            if (agent.getAdaptiveStats) {
+                const stats = agent.getAdaptiveStats();
+
+                let adaptiveStats = document.getElementById('adaptiveStats');
+                if (!adaptiveStats) {
+                    adaptiveStats = document.createElement('div');
+                    adaptiveStats.id = 'adaptiveStats';
+                    adaptiveStats.style.cssText =
+                        'margin-top:0.5rem;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;font-size:0.85rem;line-height:1.6;';
+                    document.getElementById('epsilonRow').parentElement.appendChild(adaptiveStats);
+                }
+
+                adaptiveStats.innerHTML =
+                    `<strong style="color:rgba(255,255,255,0.9);">📊 Адаптивное обучение:</strong><br>` +
+                    `<span style="color:#10b981;">✅ Успехов: ${stats.totalSuccesses} / ${stats.totalEpisodes} (${stats.successRate}%)</span><br>` +
+                    `<span style="color:#f59e0b;">🔥 Подряд успехов: ${stats.successStreak}</span><br>` +
+                    (stats.failureStreak > 0
+                        ? `<span style="color:#ef4444;">❌ Подряд неудач: ${stats.failureStreak}</span><br>`
+                        : '') +
+                    `<span style="color:#8b5cf6;">🎯 Текущий лимит: ${stats.currentMaxSteps} шагов</span><br>` +
+                    `<span style="color:rgba(255,255,255,0.7);">📏 Ср. длина (20 эп.): ${stats.avgSteps} шагов</span>`;
+            }
         }
     }
 }
