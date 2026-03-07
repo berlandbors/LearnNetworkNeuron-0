@@ -219,8 +219,7 @@ function updateRL() {
 
     const state_t1 = agent.getInputs();
 
-    // Используем умные детекторы вместо maxSteps
-    const done = agent.isDone();
+    const done = agent.reached || agent.steps >= config.maxSteps;
 
     agent.remember(state_t, action, stepReward, state_t1, done);
 
@@ -326,30 +325,6 @@ function updateUI() {
                     `Макс: <strong>${stats.maxVisits}</strong>`;
             }
 
-            // Отображение статистики завершений
-            if (agent.getTerminationStats) {
-                const stats = agent.getTerminationStats();
-
-                let terminationStats = document.getElementById('terminationStats');
-                if (!terminationStats) {
-                    terminationStats = document.createElement('div');
-                    terminationStats.id = 'terminationStats';
-                    terminationStats.style.cssText =
-                        'margin-top:0.5rem;padding:0.5rem;background:rgba(102,126,234,0.1);border-radius:4px;font-size:0.85rem;line-height:1.6;';
-                    document.getElementById('epsilonRow').parentElement.appendChild(terminationStats);
-                }
-
-                terminationStats.innerHTML =
-                    `<strong style="color:rgba(255,255,255,0.9);">📊 Причины завершения (${stats.total} эп.):</strong><br>` +
-                    `<span style="color:#10b981;">✅ Успех: ${stats.success.count} (${stats.success.percent}%)</span><br>` +
-                    `<span style="color:#f59e0b;">🔄 Циклы: ${stats.stuck.count} (${stats.stuck.percent}%)</span><br>` +
-                    `<span style="color:#ef4444;">📉 Нет прогресса: ${stats.noProgress.count} (${stats.noProgress.percent}%)</span><br>` +
-                    `<span style="color:#8b5cf6;">🔁 Повторы: ${stats.repetitive.count} (${stats.repetitive.percent}%)</span>` +
-                    (stats.emergency.count > 0
-                        ? `<br><span style="color:#dc2626;">⚠️ Аварийные: ${stats.emergency.count}</span>`
-                        : '') +
-                    `<br><br><strong style="color:#10b981;">🎯 Success rate: ${stats.successRate}%</strong>`;
-            }
         }
     }
 }
