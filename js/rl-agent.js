@@ -24,29 +24,6 @@ const EPSILON_DECAY = 0.995;
 /** Шаг обновления целевой сети */
 const TARGET_UPDATE_FREQ = 100;
 
-// ── Константы умных детекторов завершения эпизода ────────────────────────────
-
-/** Размер окна последних позиций для обнаружения зацикливания */
-const RECENT_POSITIONS_WINDOW = 20;
-/** Максимальное число уникальных клеток в окне, считающееся зациклом */
-const LOOP_UNIQUE_CELLS_MAX = 3;
-/** Доля «челночных» движений (A→B→A), считающаяся зациклом */
-const SHUTTLE_RATE_THRESHOLD = 0.7;
-/** Размер окна истории расстояний до цели */
-const DISTANCE_HISTORY_WINDOW = 20;
-/** Интервал в шагах между записями расстояния до цели */
-const DISTANCE_SAMPLE_INTERVAL = 10;
-/** Минимальный прогресс к цели (снижение расстояния) за окно истории */
-const PROGRESS_THRESHOLD = 0.95;
-/** Минимальное число шагов перед проверкой прогресса */
-const MIN_STEPS_FOR_PROGRESS = 200;
-/** Порог доли повторных посещений, считающийся избыточным */
-const REPEAT_RATE_THRESHOLD = 0.70;
-/** Минимальное число шагов перед проверкой повторов */
-const MIN_STEPS_FOR_REPEAT = 100;
-/** Аварийный лимит шагов (страховка от зависания) */
-const EMERGENCY_STEP_LIMIT = 10000;
-
 export class RLAgent extends Agent {
     /**
      * @param {number|number[]} hiddenLayers - нейронов в скрытом слое или массив [64,32]
@@ -118,165 +95,6 @@ export class RLAgent extends Agent {
 
         /** Счётчик эпизодов для статистики */
         this.episodeCount = 0;
-
-        /** История эффективности исследования (% новых клеток за эпизод) */
-        this.explorationEfficiency = [];
-
-        // ── Поля умных детекторов завершения эпизода ─────────────────────────
-
-        /** Последние N позиций для обнаружения зацикливания */
-        this.recentPositions = [];
-        /** Размер окна для recentPositions */
-        this.maxRecentPositions = RECENT_POSITIONS_WINDOW;
-
-        /** История расстояний до цели (записывается каждые 10 шагов) */
-        this.distanceHistory = [];
-        /** Размер окна для distanceHistory */
-        this.maxDistanceHistory = DISTANCE_HISTORY_WINDOW;
-
-        /** Предыдущая позиция агента */
-        this.prevPos = null;
-
-        /** Статистика причин завершения эпизодов */
-        this.terminationReasons = {
-            success:    0,
-            stuck:      0,
-            noProgress: 0,
-            repetitive: 0,
-            emergency:  0,
-        };
-
-        /** Общее количество эпизодов */
-        this.totalEpisodes = 0;
-        /** Количество успешных эпизодов */
-        this.successfulEpisodes = 0;
-    }
-
-    // ── Умные детекторы завершения эпизода ───────────────────────────────────
-
-    /**
-     * Обнаружить зацикливание агента.
-     * Проверяет три паттерна:
-     * 1. Малое число уникальных позиций в окне
-     * 2. Повторяющаяся последовательность позиций
-     * 3. «Челночные» движения A→B→A→B
-     * @returns {boolean}
-     */
-    isStuckInLoop() {
-        if (this.recentPositions.length < this.maxRecentPositions) {
-            return false;
-        }
-
-        // Метод 1: мало уникальных позиций в окне
-        const uniqueRecent = new Set(this.recentPositions);
-        if (uniqueRecent.size <= LOOP_UNIQUE_CELLS_MAX) {
-            return true;
-        }
-
-        // Метод 2: паттерн из первых 5 позиций повторяется сразу после себя
-        const patternLength = 5;
-        const pattern = this.recentPositions.slice(0, patternLength);
-        const next     = this.recentPositions.slice(patternLength, patternLength * 2);
-        if (next.length === patternLength && pattern.join('|') === next.join('|')) {
-            return true;
-        }
-
-        // Метод 3: более 70% шагов — «челночные» (pos[i] === pos[i-2])
-        let shuttleCount = 0;
-        for (let i = 2; i < this.recentPositions.length; i++) {
-            if (this.recentPositions[i] === this.recentPositions[i - 2]) {
-                shuttleCount++;
-            }
-        }
-        if (shuttleCount / (this.recentPositions.length - 2) > SHUTTLE_RATE_THRESHOLD) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Обнаружить отсутствие прогресса к цели.
-     * Сравнивает среднее расстояние в первой и второй половине истории.
-     * @returns {boolean}
-     */
-    isNotProgressing() {
-        if (this.steps < MIN_STEPS_FOR_PROGRESS ||
-            this.distanceHistory.length < this.maxDistanceHistory) {
-            return false;
-        }
-
-        const halfLength = Math.floor(this.distanceHistory.length / 2);
-        const firstHalf  = this.distanceHistory.slice(0, halfLength);
-        const secondHalf = this.distanceHistory.slice(-halfLength);
-
-        const avgFirst  = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-        const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-
-        // Нет прогресса: расстояние не уменьшилось хотя бы на 5%
-        return avgSecond >= avgFirst * PROGRESS_THRESHOLD;
-    }
-
-    /**
-     * Обнаружить избыточные повторные посещения клеток.
-     * Если более 70% шагов — повторные визиты, агент неэффективен.
-     * @returns {boolean}
-     */
-    isTooRepetitive() {
-        if (this.steps < MIN_STEPS_FOR_REPEAT) {
-            return false;
-        }
-
-        const uniqueCells    = this.visited.size;
-        const repeatedVisits = this.steps - uniqueCells;
-        const repeatRate     = repeatedVisits / this.steps;
-
-        return repeatRate > REPEAT_RATE_THRESHOLD;
-    }
-
-    /**
-     * Проверить, завершён ли эпизод.
-     * Использует набор умных детекторов вместо жёсткого maxSteps.
-     * @returns {boolean}
-     */
-    isDone() {
-        // 1. Успешное достижение цели
-        if (this.reached) {
-            this.terminationReasons.success++;
-            console.log(`✅ Эпизод ${this.episodeCount}: Цель достигнута за ${this.steps} шагов!`);
-            return true;
-        }
-
-        // 2. Застрял в цикле
-        if (this.isStuckInLoop()) {
-            this.terminationReasons.stuck++;
-            console.warn(`🔄 Эпизод ${this.episodeCount}: Зацикливание обнаружено (${this.steps} шагов, ${this.visited.size} уникальных клеток)`);
-            return true;
-        }
-
-        // 3. Нет прогресса к цели
-        if (this.isNotProgressing()) {
-            this.terminationReasons.noProgress++;
-            console.warn(`📉 Эпизод ${this.episodeCount}: Нет прогресса к цели (${this.steps} шагов, расстояние: ${this._distToGoal().toFixed(1)})`);
-            return true;
-        }
-
-        // 4. Слишком много повторных посещений
-        if (this.isTooRepetitive()) {
-            this.terminationReasons.repetitive++;
-            const repeatRate = ((this.steps - this.visited.size) / this.steps * 100).toFixed(0);
-            console.warn(`🔁 Эпизод ${this.episodeCount}: Избыточные повторы (${this.steps} шагов, ${repeatRate}% повторов)`);
-            return true;
-        }
-
-        // 5. Аварийный лимит (страховка от зависания)
-        if (this.steps >= EMERGENCY_STEP_LIMIT) {
-            this.terminationReasons.emergency++;
-            console.error(`⚠️ Эпизод ${this.episodeCount}: АВАРИЙНОЕ ЗАВЕРШЕНИЕ (${EMERGENCY_STEP_LIMIT} шагов)!`);
-            return true;
-        }
-
-        return false;
     }
 
     // ── Глобальная память ─────────────────────────────────────────────────────
@@ -287,81 +105,25 @@ export class RLAgent extends Agent {
      */
     reset(startPos) {
         // 1. Сохраняем данные, которые не должны сбрасываться
-        const globalVisited       = this.globalVisited;
-        const globalVisitCount    = this.globalVisitCount;
-        const episodeCount        = this.episodeCount;
-        const terminationReasons  = this.terminationReasons;
-        const totalEpisodes       = this.totalEpisodes;
-        const successfulEpisodes  = this.successfulEpisodes;
-        const wasReached          = this.reached;
+        const globalVisited    = this.globalVisited;
+        const globalVisitCount = this.globalVisitCount;
+        const episodeCount     = this.episodeCount;
 
         // 2. Вызываем родительский reset (стирает локальную память)
         super.reset(startPos);
 
         // 3. Восстанавливаем глобальные данные
-        this.globalVisited      = globalVisited;
-        this.globalVisitCount   = globalVisitCount;
-        this.terminationReasons = terminationReasons;
-        this.episodeCount       = episodeCount + 1;
-        this.totalEpisodes      = totalEpisodes + 1;
-        this.successfulEpisodes = wasReached ? successfulEpisodes + 1 : successfulEpisodes;
+        this.globalVisited    = globalVisited;
+        this.globalVisitCount = globalVisitCount;
+        this.episodeCount     = episodeCount + 1;
 
         // 4. Затухание памяти каждые 50 эпизодов
         if (this.episodeCount % 50 === 0) {
             this.decayGlobalMemory(0.7);
         }
 
-        // 5. Сбрасываем детекторы для нового эпизода
-        this.recentPositions = [];
-        this.distanceHistory = [];
-        this.prevPos = { ...startPos };
-
-        // 6. Обнулить награду эпизода
+        // 5. Обнулить награду эпизода
         this.episodeReward = 0;
-
-        // 7. Логируем статистику каждые 10 эпизодов
-        if (this.episodeCount % 10 === 0) {
-            this.logTerminationStats();
-        }
-    }
-
-    /**
-     * Получить статистику причин завершения эпизодов.
-     * @returns {Object}
-     */
-    getTerminationStats() {
-        const total = this.totalEpisodes;
-        const stats = {};
-
-        for (const [reason, count] of Object.entries(this.terminationReasons)) {
-            stats[reason] = {
-                count,
-                percent: total > 0 ? ((count / total) * 100).toFixed(1) : '0.0',
-            };
-        }
-
-        stats.total       = total;
-        stats.successRate = total > 0
-            ? ((this.successfulEpisodes / total) * 100).toFixed(1)
-            : '0.0';
-
-        return stats;
-    }
-
-    /**
-     * Логировать статистику причин завершения в консоль.
-     */
-    logTerminationStats() {
-        const stats = this.getTerminationStats();
-        console.log(
-            `\n📊 Статистика после ${stats.total} эпизодов:\n` +
-            `   ✅ Успех: ${stats.success.count} (${stats.success.percent}%)\n` +
-            `   🔄 Циклы: ${stats.stuck.count} (${stats.stuck.percent}%)\n` +
-            `   📉 Нет прогресса: ${stats.noProgress.count} (${stats.noProgress.percent}%)\n` +
-            `   🔁 Повторы: ${stats.repetitive.count} (${stats.repetitive.percent}%)\n` +
-            `   ⚠️ Аварийные: ${stats.emergency.count} (${stats.emergency.percent}%)\n` +
-            `\n   🎯 Success rate: ${stats.successRate}%`,
-        );
     }
 
     /**
@@ -405,33 +167,18 @@ export class RLAgent extends Agent {
     }
 
     /**
-     * Переопределяем move() для трекинга позиций, расстояний и глобальной памяти.
+     * Переопределяем move() для трекинга глобальной памяти.
      * @param {number} actionIndex
      */
     move(actionIndex) {
-        this.prevPos = { ...this.pos };
+        const oldX = this.pos.x;
+        const oldY = this.pos.y;
 
         super.move(actionIndex);
 
         // Обновить глобальную память только если движение было успешным
-        if (this.pos.x !== this.prevPos.x || this.pos.y !== this.prevPos.y) {
+        if (this.pos.x !== oldX || this.pos.y !== oldY) {
             this.updateGlobalMemory(this.pos.x, this.pos.y);
-        }
-
-        // Записываем позицию для обнаружения зацикливания
-        const posKey = `${this.pos.x},${this.pos.y}`;
-        this.recentPositions.push(posKey);
-        if (this.recentPositions.length > this.maxRecentPositions) {
-            this.recentPositions.shift();
-        }
-
-        // Записываем расстояние до цели каждые DISTANCE_SAMPLE_INTERVAL шагов
-        if (this.steps % DISTANCE_SAMPLE_INTERVAL === 0) {
-            const dist = this._distToGoal();
-            this.distanceHistory.push(dist);
-            if (this.distanceHistory.length > this.maxDistanceHistory) {
-                this.distanceHistory.shift();
-            }
         }
     }
 
