@@ -219,8 +219,7 @@ function updateRL() {
 
     const state_t1 = agent.getInputs();
 
-    // Используем умные детекторы вместо maxSteps
-    const done = agent.isDone();
+    const done = agent.reached || agent.steps >= config.maxSteps;
 
     agent.remember(state_t, action, stepReward, state_t1, done);
 
